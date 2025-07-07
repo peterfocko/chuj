@@ -128,10 +128,9 @@ void vypisHraca(HRAC *hrac) {
 void rozdajKarty(ZAPAS *zapas) {
     int pocetKarietNaRozdanie = zapas->balik.pocet / zapas->pocetHracov;
     if (pocetKarietNaRozdanie > POCET_KARIET_NA_RUKE)
-        pocetKarietNaRozdanie = POCET_KARIET_NA_RUKE;    
+        pocetKarietNaRozdanie = POCET_KARIET_NA_RUKE;
 
-    BALIK *balik = &zapas->balik;
     for (int i = 0; i < zapas->pocetHracov; i++)
         for (int j = 0; j < pocetKarietNaRozdanie; j++)
-            rozdajKartu(balik, &zapas->hrac[i].ruka);
+            rozdajKartu(&zapas->balik, &zapas->hrac[i].ruka);
 }
