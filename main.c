@@ -24,15 +24,12 @@ typedef struct {
     int pocet;
 } RUKA;
 typedef struct {
-    KARTA karta[POCET_FARIEB * POCET_CISIEL];
-    int pocet;
-} STOL;
-typedef struct {
     RUKA ruka;
-    STOL stol;
+    BALIK majetok;
 } HRAC;
 typedef struct {
     BALIK balik;
+    BALIK stol;
     HRAC hrac[MAX_POCET_HRACOV];
     int pocetHracov;
 } ZAPAS;
@@ -52,6 +49,8 @@ void vypisRuku(RUKA ruka);
 void vypisBalik(BALIK *balik);
 void vypisHraca(HRAC *hrac);
 
+int zadajVstup(HRAC *hrac);
+
 int main() {
     srand(time(NULL));
 
@@ -59,11 +58,14 @@ int main() {
     zapas.pocetHracov = 4;
     inicializujZapas(&zapas);
     rozdajKarty(&zapas);
-    vypisBalik(&zapas.balik);
+    // vypisBalik(&zapas.balik);
     printf("\n");
     for (int i = 0; i < zapas.pocetHracov; i++) {
+        printf("\e[1;1H\e[2J");
         printf("Hrac %d:\n", i+1);
         vypisHraca(&zapas.hrac[i]);
+        int vstup = zadajVstup(&zapas.hrac[i]);
+        printf("Vstup bol: %d\n", vstup);
     }
 
     return 0;
@@ -112,16 +114,19 @@ void vypisBalik(BALIK *balik) {
 void inicializujZapas(ZAPAS *zapas) {
     zapas->balik = generujBalik();
     zamiesajBalik(&zapas->balik);
+    zapas->stol.pocet = 0;
     for (int i = 0; i < zapas->pocetHracov; i++) {
         zapas->hrac[i].ruka.pocet = 0;
-        zapas->hrac[i].stol.pocet = 0;
+        zapas->hrac[i].majetok.pocet = 0;
     }
 }
 
 void vypisHraca(HRAC *hrac) {
     RUKA *ruka = &hrac->ruka;
-    for (int i = 0; i < ruka->pocet; i++)
+    for (int i = 0; i < ruka->pocet; i++) {
+        printf("(%d) ", i+1);
         vypisKartu(ruka->karta[i]);
+    }
     printf("\n");
 }
 
@@ -133,4 +138,22 @@ void rozdajKarty(ZAPAS *zapas) {
     for (int i = 0; i < zapas->pocetHracov; i++)
         for (int j = 0; j < pocetKarietNaRozdanie; j++)
             rozdajKartu(&zapas->balik, &zapas->hrac[i].ruka);
+}
+
+int zadajVstup(HRAC *hrac) {
+    int vstup;
+    while (1) {
+        printf("Zadaj kartu: ");
+        if (scanf("%d", &vstup) < 1) {
+            printf("Nevalidny vstup.\n");
+            while(getchar() != '\n');
+            continue;
+        }
+        if (vstup < 1 || vstup > hrac->ruka.pocet) {
+            printf("Ocakavane cislo medzi 1 a %d.\n", hrac->ruka.pocet);
+            continue;
+        }
+        break;
+    }
+    return vstup - 1;
 }
