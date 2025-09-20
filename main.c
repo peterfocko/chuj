@@ -575,10 +575,11 @@ void spustiKlient() {
         printf("Cakam na zvysnych hracov\n");
     printf("\n");
 
-    printf("*** Hra zacina ***\n");
     inicializujZapas(&hra);
     nacitajBalik(klientSocket, &hra.zapas.balik);
     posliSpravu(klientSocket, SPRAVA_OK);
+
+    printf("*** Hra zacina ***\n");
 
     vypisBalik(&hra.zapas.balik);
 
