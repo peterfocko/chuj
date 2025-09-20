@@ -1,6 +1,10 @@
+#include <netinet/in.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#include <sys/socket.h>
+#include <netdb.h>
+#include <unistd.h>
 
 #define POCET_FARIEB 4
 #define POCET_CISIEL 8
@@ -8,6 +12,9 @@
 #define MAX_POCET_HRACOV 4
 #define POCET_TIMOV 2
 #define POCET_VYMIEN 10e5
+
+#define PROTOKOL "TCP"
+#define PORT 1337u
 
 typedef enum {ZELEN, CERVEN, ZALUD, GULA} FARBA;
 typedef enum {SEDEM, OSEM, DEVAT, DESAT, NIZNIK, VYSNIK, KRAL, ESO} CISLO;
@@ -68,11 +75,69 @@ int zadajVstup(RUKA *ruka, int dalsieKolo);
 int main() {
     srand(time(NULL));
 
-    HRA hra;
-    inicializujHru(&hra, 4);
-    while (1) {
-        zahrajZapas(&hra);
+    int serverSocket = socket(AF_INET, SOCK_STREAM, getprotobyname(PROTOKOL)->p_proto);
+    if (serverSocket == -1) {
+        perror("Vytvorenie socketu zlyhalo");
+        exit(EXIT_FAILURE);
     }
+
+    int enable = 1;
+    if (setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(enable)) < 0) {
+        perror("setsockopt(SO_REUSEADDR) zlyhalo");
+        exit(EXIT_FAILURE);
+    }
+
+    struct sockaddr_in adresaServera;
+    adresaServera.sin_family = AF_INET;
+    adresaServera.sin_addr.s_addr = htonl(INADDR_ANY);
+    adresaServera.sin_port = htons(PORT);
+
+    if (bind(serverSocket, (struct sockaddr *) &adresaServera, sizeof(adresaServera)) == -1) {
+        perror("Pripojenie socketu zlyhalo");
+        exit(EXIT_FAILURE);
+    }
+    
+
+    if (listen(serverSocket, MAX_POCET_HRACOV - 1) == -1) {
+        perror("Pocuvanie na sockete zlyhalo");
+        exit(EXIT_FAILURE);
+    }
+    printf("Pocuvam na porte %u\n", PORT);
+
+    while (1) {
+        struct sockaddr_in adresaKlienta;
+        socklen_t klientVelkost = (socklen_t) sizeof(adresaKlienta);
+        int klientSocket = accept(
+            serverSocket,
+            (struct sockaddr*)&adresaKlienta,
+            &klientVelkost
+        );
+        printf("Novy klient!\n");
+
+        char buffer[1024];
+        int index = 0;
+        for (int i = 0; i < sizeof(buffer); i++) {
+            char znak;
+            int pocet = read(klientSocket, &znak, 1);
+            if (pocet == 0 || znak == '\n') {
+                buffer[index] = '\0';
+                break;
+            }
+            buffer[index++] = znak;
+        }
+    
+        printf("Klient poslal: %s\n", buffer);
+        write(klientSocket, "Ahoj kokot\n", 11);
+        close(klientSocket);
+    }
+
+    close(serverSocket);
+
+    // HRA hra;
+    // inicializujHru(&hra, 4);
+    // while (1) {
+    //     zahrajZapas(&hra);
+    // }
     return 0;
 }
 
