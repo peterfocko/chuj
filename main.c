@@ -4,6 +4,7 @@
 #include <time.h>
 #include <sys/socket.h>
 #include <netdb.h>
+#include <arpa/inet.h>
 #include <unistd.h>
 #include <string.h>
 
@@ -75,6 +76,12 @@ void vypisBalik(BALIK *balik);
 void vypisRuku(RUKA *ruka, int dalsieKolo);
 
 int zadajVstup(RUKA *ruka, int dalsieKolo);
+int zistiServer();
+int zistiPocetHracov();
+in_addr_t zistiAdresuServera();
+
+void spustiServer();
+void spustiKlient();
 
 int vytvorServerSocket(int pocetHracov);
 void serializujBalik(BALIK *balik, char *buffer);
@@ -85,31 +92,36 @@ void posliSpravu(int soket, char *buffer);
 int main() {
     srand(time(NULL));
 
-    int pocetHracov = 4;
-    int serverSocket = vytvorServerSocket(pocetHracov);
-    int klientSoket[pocetHracov - 1];
-    pripojKlientov(serverSocket, klientSoket, pocetHracov);
+    printf("*** CHUJ ****\n");
+    if (zistiServer())
+        spustiServer();
+    else
+        spustiKlient();
 
-    HRA hra;
-    inicializujHru(&hra, 4);
-    inicializujZapas(&hra);
-    zamiesajBalik(&hra.zapas.balik);
+    return 0;
 
-    char buffer[VELKOST_BUFFERA + 1];
-    serializujBalik(&hra.zapas.balik, buffer);
-    for (int i = 0; i < pocetHracov - 1; i++) {
-        posliSpravu(klientSoket[i], buffer);
-        char vstupnyBuffer[VELKOST_BUFFERA + 1];
-        precitajSpravu(klientSoket[i], vstupnyBuffer);
-        if (strcmp(vstupnyBuffer, SPRAVA_OK) != 0) {
-            printf("Invalidna sprava od Hrac %d: %s\n", i+2, vstupnyBuffer);
-            exit(EXIT_FAILURE);
-        }
-    }
+    // int pocetHracov = 4;
 
-    for (int i = 0; i < pocetHracov - 1; i++)
-        close(klientSoket[i]);
-    close(serverSocket);
+    // HRA hra;
+    // inicializujHru(&hra, 4);
+    // inicializujZapas(&hra);
+    // zamiesajBalik(&hra.zapas.balik);
+
+    // char buffer[VELKOST_BUFFERA + 1];
+    // serializujBalik(&hra.zapas.balik, buffer);
+    // for (int i = 0; i < pocetHracov - 1; i++) {
+    //     posliSpravu(klientSoket[i], buffer);
+    //     char vstupnyBuffer[VELKOST_BUFFERA + 1];
+    //     precitajSpravu(klientSoket[i], vstupnyBuffer);
+    //     if (strcmp(vstupnyBuffer, SPRAVA_OK) != 0) {
+    //         printf("Invalidna sprava od Hrac %d: %s\n", i+2, vstupnyBuffer);
+    //         exit(EXIT_FAILURE);
+    //     }
+    // }
+
+    // for (int i = 0; i < pocetHracov - 1; i++)
+    //     close(klientSoket[i]);
+    // close(serverSocket);
 
     // HRA hra;
     // inicializujHru(&hra, 4);
@@ -204,6 +216,7 @@ int zadajVstup(RUKA *ruka, int dalsieKolo) {
         }
         if (vstup < min || vstup > ruka->pocet) {
             printf("Ocakavane cislo medzi %d a %d.\n", min, ruka->pocet);
+            while (getchar() != '\n');
             continue;
         }
         break;
@@ -389,36 +402,57 @@ int vytvorServerSocket(int pocetHracov) {
     return serverSocket;
 }
 
+int vytvorKlientSocket(in_addr_t serverHost) {
+    int klientSocket = socket(AF_INET, SOCK_STREAM, getprotobyname(PROTOKOL)->p_proto);
+    if (klientSocket == -1) {
+        perror("Vytvorenie socketu zlyhalo");
+        exit(EXIT_FAILURE);
+    }
+
+    struct sockaddr_in adresaServera;
+    adresaServera.sin_family = AF_INET;
+    adresaServera.sin_addr.s_addr = serverHost;
+    adresaServera.sin_port = htons(PORT);
+
+    if (connect(klientSocket, (struct sockaddr *) &adresaServera, sizeof(adresaServera)) == -1) {
+        perror("Pripojenie na server zlyhalo");
+        exit(EXIT_FAILURE);
+    }
+
+    return klientSocket;
+}
+
 void pripojKlientov(int serverSocket, int *klientSocket, int pocetHracov) {
-    int hraci = 0;
-    while (hraci < pocetHracov - 1) {
+    int hrac = 0;
+    while (hrac < pocetHracov - 1) {
+        printf("Cakam pripojenie Hrac %d\n", hrac+2);
         struct sockaddr_in adresaKlienta;
         socklen_t klientVelkost = (socklen_t) sizeof(adresaKlienta);
-        klientSocket[hraci] = accept(
+        klientSocket[hrac] = accept(
             serverSocket,
             (struct sockaddr*)&adresaKlienta,
             &klientVelkost
         );
 
         char buffer[VELKOST_BUFFERA + 1];
-        precitajSpravu(klientSocket[hraci], buffer);
+        precitajSpravu(klientSocket[hrac], buffer);
         if (strcmp(buffer, SPRAVA_NOVY_KLIENT) != 0) {
             printf("Invalidna sprava: %s, zatvaram socket.\n", buffer);
-            close(klientSocket[hraci]);
+            close(klientSocket[hrac]);
             continue;
         }
 
-        sprintf(buffer, "H%dI%d\n", pocetHracov, hraci+1);
-        posliSpravu(klientSocket[hraci], buffer);
+        sprintf(buffer, "H%dI%d\n", pocetHracov, hrac+1);
+        posliSpravu(klientSocket[hrac], buffer);
 
-        precitajSpravu(klientSocket[hraci], buffer);
+        precitajSpravu(klientSocket[hrac], buffer);
         if (strcmp(buffer, SPRAVA_OK) != 0) {
             printf("Invalidna sprava: %s, zatvaram socket.\n", buffer);
-            close(klientSocket[hraci]);
+            close(klientSocket[hrac]);
             continue;
         }
-        hraci++;
-        printf("Hrac %d uspesne pripojeny.\n", hraci+1);
+        printf("Hrac %d uspesne pripojeny.\n", hrac+2);
+        hrac++;
     }
 }
 
@@ -429,4 +463,75 @@ void serializujBalik(BALIK *balik, char *buffer) {
     }
     buffer[POCET_FARIEB * POCET_CISIEL] = '\n';
     buffer[POCET_FARIEB * POCET_CISIEL + 1] = '\0';
+}
+
+int zistiServer() {
+    printf("Spustit: \n(S) Server\n(K) Klient\n");
+    while (1) {
+        char vstup;
+        printf("Zadaj moznost S|K: ");
+        if (scanf("%c", &vstup) < 1) {
+            printf("Nevalidny vstup.\n");
+            while (getchar() != '\n');
+            continue;
+        }
+        if (vstup != 'S' && vstup != 'K' && vstup != 's' && vstup != 'k') {
+            printf("Ocakavana moznost S alebo K.\n");
+            while (getchar() != '\n');
+            continue;
+        }
+        printf("\n");
+        return vstup == 'S' || vstup == 's' ? 1 : 0;
+    }
+}
+
+int zistiPocetHracov() {
+    while (1) {
+        int vstup;
+        printf("Zadaj pocet hracov 2|4: ");
+        if (scanf("%d", &vstup) < 1) {
+            printf("Nevalidny vstup.\n");
+            while (getchar() != '\n');
+            continue;
+        }
+        if (vstup != 2 && vstup != 4) {
+            printf("Ocakavana moznost 2 alebo 4.\n");
+            while (getchar() != '\n');
+            continue;
+        }
+        return vstup;
+    }
+}
+
+in_addr_t zistiAdresuServera() {
+    while (1) {
+        printf("Zadaj IP servera: ");
+        char vstup[20];
+        struct hostent* host;
+        in_addr_t adresa;
+        if (scanf("%s", vstup) < 1 || (host = gethostbyname(vstup)) == NULL || (adresa = inet_addr(inet_ntoa(*(struct in_addr *) *(host->h_addr_list)))) == (in_addr_t)-1) {
+            printf("Nevalidny vstup.\n");
+            while (getchar() != '\n');
+            continue;
+        }
+        return adresa;
+    }
+}
+
+void spustiServer() {
+    printf("*** CHUJ SERVER ***\n");
+    int pocetHracov = zistiPocetHracov();
+    printf("Startujem server pre %d hracov.\n", pocetHracov);
+
+    int serverSocket = vytvorServerSocket(pocetHracov);
+    printf("Pocuvam na porte %u\n\n", PORT);
+
+    int klientSocket[pocetHracov - 1];
+    pripojKlientov(serverSocket, klientSocket, pocetHracov);
+}
+
+void spustiKlient() {
+    printf("*** CHUJ SERVER ***\n");
+    in_addr_t serverHost = zistiAdresuServera();
+    int klientSocket = vytvorKlientSocket(serverHost);
 }
