@@ -53,6 +53,7 @@ typedef struct {
     int skore[POCET_TIMOV];
 } HRA;
 
+const char novyRiadok = '\n';
 const char *FARBA_RETAZEC[] = {"Zelen", "Cerven", "Zalud", "Gula"};
 const char *FARBA_PRIZNAK[] = {"\x1b[32m", "\x1b[31m", "\x1b[33m", "\x1b[34m"};
 const char *CISLO_RETAZEC[] = {"Sedmicka", "Osmicka", "Deviatka", "Desiatka", "Niznik", "Vysnik", "Kral", "Eso"};
@@ -79,12 +80,14 @@ int zadajVstup(RUKA *ruka, int dalsieKolo);
 int zistiServer();
 int zistiPocetHracov();
 in_addr_t zistiAdresuServera();
+void pripojServer(int klientSocket, int *pocetHracov, int *ja);
+void nacitajBalik(int socket, BALIK *balik);
 
 void spustiServer();
 void spustiKlient();
 
 int vytvorServerSocket(int pocetHracov);
-void serializujBalik(BALIK *balik, char *buffer);
+void posliBalik(int socket, BALIK *balik);
 void pripojKlientov(int serverSoket, int *klientSocket, int pocetHracov);
 void precitajSpravu(int soket, char *buffer);
 void posliSpravu(int soket, char *buffer);
@@ -99,29 +102,6 @@ int main() {
         spustiKlient();
 
     return 0;
-
-    // int pocetHracov = 4;
-
-    // HRA hra;
-    // inicializujHru(&hra, 4);
-    // inicializujZapas(&hra);
-    // zamiesajBalik(&hra.zapas.balik);
-
-    // char buffer[VELKOST_BUFFERA + 1];
-    // serializujBalik(&hra.zapas.balik, buffer);
-    // for (int i = 0; i < pocetHracov - 1; i++) {
-    //     posliSpravu(klientSoket[i], buffer);
-    //     char vstupnyBuffer[VELKOST_BUFFERA + 1];
-    //     precitajSpravu(klientSoket[i], vstupnyBuffer);
-    //     if (strcmp(vstupnyBuffer, SPRAVA_OK) != 0) {
-    //         printf("Invalidna sprava od Hrac %d: %s\n", i+2, vstupnyBuffer);
-    //         exit(EXIT_FAILURE);
-    //     }
-    // }
-
-    // for (int i = 0; i < pocetHracov - 1; i++)
-    //     close(klientSoket[i]);
-    // close(serverSocket);
 
     // HRA hra;
     // inicializujHru(&hra, 4);
@@ -364,8 +344,13 @@ void precitajSpravu(int socket, char *buffer) {
     buffer[i] = '\0';
 }
 
-void posliSpravu(int soket, char *buffer) {
-    if (write(soket, buffer, strlen(buffer)) == -1) {
+void posliSpravu(int socket, char *buffer) {
+    int dlzka = strlen(buffer);
+    if (write(socket, buffer, strlen(buffer)) == -1) {
+        perror("Chyba zapisu socketu");
+        exit(EXIT_FAILURE);
+    }
+    if (write(socket, &novyRiadok, sizeof(novyRiadok)) == -1) {
         perror("Chyba zapisu socketu");
         exit(EXIT_FAILURE);
     }
@@ -442,7 +427,7 @@ void pripojKlientov(int serverSocket, int *klientSocket, int pocetHracov) {
             continue;
         }
 
-        sprintf(buffer, "H%dI%d\n", pocetHracov, hrac+1);
+        sprintf(buffer, "H%dI%d", pocetHracov, hrac+1);
         posliSpravu(klientSocket[hrac], buffer);
 
         precitajSpravu(klientSocket[hrac], buffer);
@@ -456,13 +441,15 @@ void pripojKlientov(int serverSocket, int *klientSocket, int pocetHracov) {
     }
 }
 
-void serializujBalik(BALIK *balik, char *buffer) {
+void posliBalik(int socket, BALIK *balik) {
+    char buffer[VELKOST_BUFFERA];
     for (int i = 0; i < POCET_FARIEB * POCET_CISIEL; i++) {
         buffer[i*2] = '0' + balik->karta[i].farba;
         buffer[i*2+1] = '0' + balik->karta[i].cislo;
     }
-    buffer[POCET_FARIEB * POCET_CISIEL] = '\n';
-    buffer[POCET_FARIEB * POCET_CISIEL + 1] = '\0';
+    buffer[POCET_FARIEB * POCET_CISIEL * 2] = '\n';
+    buffer[POCET_FARIEB * POCET_CISIEL * 2 + 1] = '\0';
+    posliSpravu(socket, buffer);
 }
 
 int zistiServer() {
@@ -528,10 +515,72 @@ void spustiServer() {
 
     int klientSocket[pocetHracov - 1];
     pripojKlientov(serverSocket, klientSocket, pocetHracov);
+    printf("\n");
+
+    HRA hra;
+    inicializujHru(&hra, pocetHracov);
+    printf("*** Hra zacina ***\n");
+
+    inicializujZapas(&hra);
+    zamiesajBalik(&hra.zapas.balik);
+    for (int i = 0; i < pocetHracov - 1; i++) {
+        posliBalik(klientSocket[i], &hra.zapas.balik);
+        char buffer[VELKOST_BUFFERA + 1];
+        precitajSpravu(klientSocket[i], buffer);
+        if (strcmp(buffer, SPRAVA_OK) != 0) {
+            printf("Invalidna sprava od Hrac %d: %s\n", i+2, buffer);
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    vypisBalik(&hra.zapas.balik);
+
+    for (int i = 0; i < pocetHracov - 1; i++)
+        close(klientSocket[i]);
+    close(serverSocket);
+}
+
+void pripojServer(int klientSocket, int *pocetHracov, int *ja) {
+    posliSpravu(klientSocket, SPRAVA_NOVY_KLIENT);
+    char buffer[VELKOST_BUFFERA + 1];
+    precitajSpravu(klientSocket, buffer);
+    int pocet = sscanf(buffer, "H%dI%d", pocetHracov, ja);
+    if (pocet != 2) {
+        printf("Invalidna sprava: %s\n", buffer);
+        exit(EXIT_FAILURE);
+    }
+    posliSpravu(klientSocket, SPRAVA_OK);
+}
+
+void nacitajBalik(int socket, BALIK *balik) {
+    char buffer[VELKOST_BUFFERA + 1];
+    precitajSpravu(socket, buffer);
+    for (int i = 0; i < POCET_FARIEB * POCET_CISIEL; i++) {
+        balik->karta[i].farba = buffer[i*2] - '0';
+        balik->karta[i].cislo = buffer[i*2 + 1] - '0';
+    }
 }
 
 void spustiKlient() {
-    printf("*** CHUJ SERVER ***\n");
+    printf("*** CHUJ KLIENT ***\n");
     in_addr_t serverHost = zistiAdresuServera();
     int klientSocket = vytvorKlientSocket(serverHost);
+
+    int pocetHracov, ja;
+    pripojServer(klientSocket, &pocetHracov, &ja);
+    HRA hra;
+    inicializujHru(&hra, pocetHracov);
+    printf("Uspesne pripojenie na hru s %d hracmi ako Hrac %d\n", pocetHracov, ja+1);
+    if (ja + 1 != pocetHracov) 
+        printf("Cakam na zvysnych hracov\n");
+    printf("\n");
+
+    printf("*** Hra zacina ***\n");
+    inicializujZapas(&hra);
+    nacitajBalik(klientSocket, &hra.zapas.balik);
+    posliSpravu(klientSocket, SPRAVA_OK);
+
+    vypisBalik(&hra.zapas.balik);
+
+    close(klientSocket);
 }
