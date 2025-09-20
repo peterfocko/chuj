@@ -5,6 +5,7 @@
 #include <sys/socket.h>
 #include <netdb.h>
 #include <unistd.h>
+#include <string.h>
 
 #define POCET_FARIEB 4
 #define POCET_CISIEL 8
@@ -15,6 +16,9 @@
 
 #define PROTOKOL "TCP"
 #define PORT 1337u
+#define VELKOST_BUFFERA 80
+#define SPRAVA_NOVY_KLIENT "AHOJ"
+#define SPRAVA_OK "OK"
 
 typedef enum {ZELEN, CERVEN, ZALUD, GULA} FARBA;
 typedef enum {SEDEM, OSEM, DEVAT, DESAT, NIZNIK, VYSNIK, KRAL, ESO} CISLO;
@@ -72,65 +76,39 @@ void vypisRuku(RUKA *ruka, int dalsieKolo);
 
 int zadajVstup(RUKA *ruka, int dalsieKolo);
 
+int vytvorServerSocket(int pocetHracov);
+void serializujBalik(BALIK *balik, char *buffer);
+void pripojKlientov(int serverSoket, int *klientSocket, int pocetHracov);
+void precitajSpravu(int soket, char *buffer);
+void posliSpravu(int soket, char *buffer);
+
 int main() {
     srand(time(NULL));
 
-    int serverSocket = socket(AF_INET, SOCK_STREAM, getprotobyname(PROTOKOL)->p_proto);
-    if (serverSocket == -1) {
-        perror("Vytvorenie socketu zlyhalo");
-        exit(EXIT_FAILURE);
-    }
+    int pocetHracov = 4;
+    int serverSocket = vytvorServerSocket(pocetHracov);
+    int klientSoket[pocetHracov - 1];
+    pripojKlientov(serverSocket, klientSoket, pocetHracov);
 
-    int enable = 1;
-    if (setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(enable)) < 0) {
-        perror("setsockopt(SO_REUSEADDR) zlyhalo");
-        exit(EXIT_FAILURE);
-    }
+    HRA hra;
+    inicializujHru(&hra, 4);
+    inicializujZapas(&hra);
+    zamiesajBalik(&hra.zapas.balik);
 
-    struct sockaddr_in adresaServera;
-    adresaServera.sin_family = AF_INET;
-    adresaServera.sin_addr.s_addr = htonl(INADDR_ANY);
-    adresaServera.sin_port = htons(PORT);
-
-    if (bind(serverSocket, (struct sockaddr *) &adresaServera, sizeof(adresaServera)) == -1) {
-        perror("Pripojenie socketu zlyhalo");
-        exit(EXIT_FAILURE);
-    }
-    
-
-    if (listen(serverSocket, MAX_POCET_HRACOV - 1) == -1) {
-        perror("Pocuvanie na sockete zlyhalo");
-        exit(EXIT_FAILURE);
-    }
-    printf("Pocuvam na porte %u\n", PORT);
-
-    while (1) {
-        struct sockaddr_in adresaKlienta;
-        socklen_t klientVelkost = (socklen_t) sizeof(adresaKlienta);
-        int klientSocket = accept(
-            serverSocket,
-            (struct sockaddr*)&adresaKlienta,
-            &klientVelkost
-        );
-        printf("Novy klient!\n");
-
-        char buffer[1024];
-        int index = 0;
-        for (int i = 0; i < sizeof(buffer); i++) {
-            char znak;
-            int pocet = read(klientSocket, &znak, 1);
-            if (pocet == 0 || znak == '\n') {
-                buffer[index] = '\0';
-                break;
-            }
-            buffer[index++] = znak;
+    char buffer[VELKOST_BUFFERA + 1];
+    serializujBalik(&hra.zapas.balik, buffer);
+    for (int i = 0; i < pocetHracov - 1; i++) {
+        posliSpravu(klientSoket[i], buffer);
+        char vstupnyBuffer[VELKOST_BUFFERA + 1];
+        precitajSpravu(klientSoket[i], vstupnyBuffer);
+        if (strcmp(vstupnyBuffer, SPRAVA_OK) != 0) {
+            printf("Invalidna sprava od Hrac %d: %s\n", i+2, vstupnyBuffer);
+            exit(EXIT_FAILURE);
         }
-    
-        printf("Klient poslal: %s\n", buffer);
-        write(klientSocket, "Ahoj kokot\n", 11);
-        close(klientSocket);
     }
 
+    for (int i = 0; i < pocetHracov - 1; i++)
+        close(klientSoket[i]);
     close(serverSocket);
 
     // HRA hra;
@@ -185,7 +163,6 @@ void inicializujHru(HRA *hra, int pocetHracov) {
 void inicializujZapas(HRA *hra) {
     ZAPAS *zapas = &hra->zapas;
     zapas->balik = generujBalik();
-    zamiesajBalik(&zapas->balik);
     zapas->stol.pocet = 0;
     zapas->zacinaKolo = hra->zacinaZapas;
     for (int i = 0; i < zapas->pocetHracov; i++) {
@@ -308,6 +285,7 @@ void zahrajKolo(ZAPAS *zapas) {
 void zahrajZapas(HRA* hra) {
     ZAPAS *zapas = &hra->zapas;
     inicializujZapas(hra);
+    zamiesajBalik(&hra->zapas.balik);
     int zacinajuciTim = zapas->zacinaKolo % POCET_TIMOV;
 
     printf("*** Zacina zapas, zacina tim %d ***\n", zacinajuciTim + 1);
@@ -357,4 +335,98 @@ int spocitajKarty(ZAPAS* zapas, int tim) {
     for (int i = tim; i < zapas->pocetHracov; i+=POCET_TIMOV)
         pocetKariet += zapas->hrac[i].majetok.pocet;
     return pocetKariet;
+}
+
+void precitajSpravu(int socket, char *buffer) {
+    int i;
+    for (i = 0; i < VELKOST_BUFFERA; i++) {
+        int pocet = read(socket, &buffer[i], 1);
+        if (pocet == -1) {
+            perror("Chyba citania socketu");
+            exit(EXIT_FAILURE);
+        }
+        if (pocet == 0 || buffer[i] == '\n')
+            break;
+    }
+    buffer[i] = '\0';
+}
+
+void posliSpravu(int soket, char *buffer) {
+    if (write(soket, buffer, strlen(buffer)) == -1) {
+        perror("Chyba zapisu socketu");
+        exit(EXIT_FAILURE);
+    }
+}
+
+int vytvorServerSocket(int pocetHracov) {
+    int serverSocket = socket(AF_INET, SOCK_STREAM, getprotobyname(PROTOKOL)->p_proto);
+    if (serverSocket == -1) {
+        perror("Vytvorenie socketu zlyhalo");
+        exit(EXIT_FAILURE);
+    }
+
+    int enable = 1;
+    if (setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(enable)) < 0) {
+        perror("setsockopt(SO_REUSEADDR) zlyhalo");
+        exit(EXIT_FAILURE);
+    }
+
+    struct sockaddr_in adresaServera;
+    adresaServera.sin_family = AF_INET;
+    adresaServera.sin_addr.s_addr = htonl(INADDR_ANY);
+    adresaServera.sin_port = htons(PORT);
+
+    if (bind(serverSocket, (struct sockaddr *) &adresaServera, sizeof(adresaServera)) == -1) {
+        perror("Pripojenie socketu zlyhalo");
+        exit(EXIT_FAILURE);
+    }
+
+    if (listen(serverSocket, pocetHracov - 1) == -1) {
+        perror("Pocuvanie na sockete zlyhalo");
+        exit(EXIT_FAILURE);
+    }
+
+    return serverSocket;
+}
+
+void pripojKlientov(int serverSocket, int *klientSocket, int pocetHracov) {
+    int hraci = 0;
+    while (hraci < pocetHracov - 1) {
+        struct sockaddr_in adresaKlienta;
+        socklen_t klientVelkost = (socklen_t) sizeof(adresaKlienta);
+        klientSocket[hraci] = accept(
+            serverSocket,
+            (struct sockaddr*)&adresaKlienta,
+            &klientVelkost
+        );
+
+        char buffer[VELKOST_BUFFERA + 1];
+        precitajSpravu(klientSocket[hraci], buffer);
+        if (strcmp(buffer, SPRAVA_NOVY_KLIENT) != 0) {
+            printf("Invalidna sprava: %s, zatvaram socket.\n", buffer);
+            close(klientSocket[hraci]);
+            continue;
+        }
+
+        sprintf(buffer, "H%dI%d\n", pocetHracov, hraci+1);
+        posliSpravu(klientSocket[hraci], buffer);
+
+        precitajSpravu(klientSocket[hraci], buffer);
+        if (strcmp(buffer, SPRAVA_OK) != 0) {
+            printf("Invalidna sprava: %s, zatvaram socket.\n", buffer);
+            close(klientSocket[hraci]);
+            continue;
+        }
+        hraci++;
+        printf("Hrac %d uspesne pripojeny.\n", hraci+1);
+    }
+}
+
+void serializujBalik(BALIK *balik, char *buffer) {
+    for (int i = 0; i < POCET_FARIEB * POCET_CISIEL; i++) {
+        buffer[i*2] = '0' + balik->karta[i].farba;
+        buffer[i*2+1] = '0' + balik->karta[i].cislo;
+    }
+    buffer[POCET_FARIEB * POCET_CISIEL] = '\n';
+    buffer[POCET_FARIEB * POCET_CISIEL + 1] = '\0';
 }
