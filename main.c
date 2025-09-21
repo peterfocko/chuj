@@ -93,6 +93,7 @@ void precitajSpravu(int soket, char *buffer);
 int overSpravu(int socket, char *sprava);
 void posliSpravu(int soket, char *buffer);
 void posliVstup(ZAPAS *zapas, int ja, int vstup, int *sockety);
+int precitajVstup(int socket);
 
 int main() {
     srand(time(NULL));
