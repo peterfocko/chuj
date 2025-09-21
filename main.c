@@ -67,8 +67,8 @@ void rozdajKarty(ZAPAS *zapas);
 void vylozKartu(ZAPAS *zapas, int hrac, KARTA karta);
 RUKA moznaRuka(ZAPAS *zapas);
 void uzavriKolo(ZAPAS *zapas);
-void zahrajKolo(ZAPAS *zapas);
-void zahrajZapas(HRA* hra);
+void zahrajKolo(ZAPAS *zapas, int ja, int *sockety);
+void zahrajZapas(HRA* hra, int ja, int *sockety);
 int spocitajMastneKarty(ZAPAS *zapas, int tim);
 int spocitajKarty(ZAPAS* zapas, int tim);
 
@@ -90,7 +90,9 @@ int vytvorServerSocket(int pocetHracov);
 void posliBalik(int socket, BALIK *balik);
 void pripojKlientov(int serverSoket, int *klientSocket, int pocetHracov);
 void precitajSpravu(int soket, char *buffer);
+int overSpravu(int socket, char *sprava);
 void posliSpravu(int soket, char *buffer);
+void posliVstup(ZAPAS *zapas, int ja, int vstup, int *sockety);
 
 int main() {
     srand(time(NULL));
@@ -101,13 +103,6 @@ int main() {
     else
         spustiKlient();
 
-    return 0;
-
-    // HRA hra;
-    // inicializujHru(&hra, 4);
-    // while (1) {
-    //     zahrajZapas(&hra);
-    // }
     return 0;
 }
 
@@ -250,8 +245,37 @@ void uzavriKolo(ZAPAS* zapas) {
     zapas->zacinaKolo = vitaz;
 }
 
-void zahrajKolo(ZAPAS *zapas) {
-    while (zapas->hrac[zapas->zacinaKolo].ruka.pocet > 0)
+void posliVstup(ZAPAS *zapas, int ja, int vstup, int *sockety) {
+    char sprava[] = "Rx";
+    sprava[1] = '0' + vstup;
+    if (ja > 0) {
+        posliSpravu(*sockety, sprava);
+        overSpravu(*sockety, SPRAVA_OK);
+        return;
+    }
+
+    for (int i = 0; i < zapas->pocetHracov - 1; i++) {
+        posliSpravu(sockety[i], sprava);
+        overSpravu(sockety[i], SPRAVA_OK);
+    }
+}
+
+int precitajVstup(int socket) {
+    char buffer[VELKOST_BUFFERA + 1];
+    precitajSpravu(socket, buffer);
+    if (strlen(buffer) != 2 || buffer[0] != 'R') {
+        printf("Invalidny vstup: %s\n", buffer);
+        exit(EXIT_FAILURE);
+    }
+    posliSpravu(socket, SPRAVA_OK);
+    return buffer[1]-'0';
+}
+
+void zahrajKolo(ZAPAS *zapas, int ja, int *sockety) {
+    printf("Stol:\n");
+    vypisBalik(&zapas->stol);
+
+    while (zapas->hrac[zapas->zacinaKolo].ruka.pocet > 0) {
         for (int i = 0; i < zapas->pocetHracov; i++) {
             int hrac = (zapas->zacinaKolo + i) % zapas->pocetHracov;
             int dalsieKolo = zapas->stol.pocet > 0 && i == 0;
@@ -259,26 +283,36 @@ void zahrajKolo(ZAPAS *zapas) {
             if (ruka.pocet == 0)
                 return;
 
-            printf("Stol:\n");
-            vypisBalik(&zapas->stol);
-            printf("\n");
+            int vstup;
+            if (hrac == ja) {
+                printf("Hrac %d (Tim %d):\n", hrac+1, hrac % POCET_TIMOV + 1);
+                vypisRuku(&ruka, dalsieKolo);
+                vstup = zadajVstup(&ruka, dalsieKolo);
+                posliVstup(zapas, ja, vstup, sockety);
+                printf("\n");
+                if (vstup != 0) {
+                    printf("Stol:\n");
+                    vypisBalik(&zapas->stol);
+                }
+            } else if (ja == 0) {
+                vstup = precitajVstup(sockety[hrac-1]);
+                posliVstup(zapas, ja, vstup, sockety);
+            }
 
-            printf("Hrac %d (Tim %d):\n", hrac+1, hrac % POCET_TIMOV + 1);
-            vypisRuku(&ruka, dalsieKolo);
-            int vstup = zadajVstup(&ruka, dalsieKolo);
-            printf("\n");
+            if (ja > 0)
+                vstup = precitajVstup(*sockety);
+            
             if (vstup == 0)
                 return;
-
-            KARTA karta = ruka.karta[vstup - 1];
+            KARTA karta = ruka.karta[vstup-1];
             vylozKartu(zapas, hrac, karta);
+            vypisKartu(karta);
         }
+    }
 }
 
-void zahrajZapas(HRA* hra) {
+void zahrajZapas(HRA* hra, int ja, int *sockety) {
     ZAPAS *zapas = &hra->zapas;
-    inicializujZapas(hra);
-    zamiesajBalik(&hra->zapas.balik);
     int zacinajuciTim = zapas->zacinaKolo % POCET_TIMOV;
 
     printf("*** Zacina zapas, zacina tim %d ***\n", zacinajuciTim + 1);
@@ -288,7 +322,7 @@ void zahrajZapas(HRA* hra) {
 
     while (zapas->balik.pocet > 0 || zapas->hrac[zapas->zacinaKolo].ruka.pocet > 0) {
         rozdajKarty(zapas);
-        zahrajKolo(zapas);
+        zahrajKolo(zapas, ja, sockety);
         uzavriKolo(zapas);
         printf("*** Koniec kola, vitazi Hrac %d ***\n\n", zapas->zacinaKolo+1);
     }
@@ -342,6 +376,16 @@ void precitajSpravu(int socket, char *buffer) {
             break;
     }
     buffer[i] = '\0';
+}
+
+int overSpravu(int socket, char *sprava) {
+    char buffer[VELKOST_BUFFERA + 1];
+    precitajSpravu(socket, buffer);
+    if (strcmp(buffer, sprava) != 0) {
+        printf("Invalidna sprava: %s\n", buffer);
+        return 0;
+    }
+    return 1;
 }
 
 void posliSpravu(int socket, char *buffer) {
@@ -419,20 +463,16 @@ void pripojKlientov(int serverSocket, int *klientSocket, int pocetHracov) {
             &klientVelkost
         );
 
-        char buffer[VELKOST_BUFFERA + 1];
-        precitajSpravu(klientSocket[hrac], buffer);
-        if (strcmp(buffer, SPRAVA_NOVY_KLIENT) != 0) {
-            printf("Invalidna sprava: %s, zatvaram socket.\n", buffer);
+        if (!overSpravu(klientSocket[hrac], SPRAVA_NOVY_KLIENT)) {
             close(klientSocket[hrac]);
             continue;
         }
 
+        char buffer[VELKOST_BUFFERA + 1];
         sprintf(buffer, "H%dI%d", pocetHracov, hrac+1);
         posliSpravu(klientSocket[hrac], buffer);
 
-        precitajSpravu(klientSocket[hrac], buffer);
-        if (strcmp(buffer, SPRAVA_OK) != 0) {
-            printf("Invalidna sprava: %s, zatvaram socket.\n", buffer);
+        if (!overSpravu(klientSocket[hrac], SPRAVA_OK)) {
             close(klientSocket[hrac]);
             continue;
         }
@@ -447,8 +487,7 @@ void posliBalik(int socket, BALIK *balik) {
         buffer[i*2] = '0' + balik->karta[i].farba;
         buffer[i*2+1] = '0' + balik->karta[i].cislo;
     }
-    buffer[POCET_FARIEB * POCET_CISIEL * 2] = '\n';
-    buffer[POCET_FARIEB * POCET_CISIEL * 2 + 1] = '\0';
+    buffer[POCET_FARIEB * POCET_CISIEL * 2] = '\0';
     posliSpravu(socket, buffer);
 }
 
@@ -519,21 +558,27 @@ void spustiServer() {
 
     HRA hra;
     inicializujHru(&hra, pocetHracov);
-    printf("*** Hra zacina ***\n");
-
+    
     inicializujZapas(&hra);
     zamiesajBalik(&hra.zapas.balik);
     for (int i = 0; i < pocetHracov - 1; i++) {
         posliBalik(klientSocket[i], &hra.zapas.balik);
-        char buffer[VELKOST_BUFFERA + 1];
-        precitajSpravu(klientSocket[i], buffer);
-        if (strcmp(buffer, SPRAVA_OK) != 0) {
-            printf("Invalidna sprava od Hrac %d: %s\n", i+2, buffer);
+        if (!overSpravu(klientSocket[i], SPRAVA_OK))
             exit(EXIT_FAILURE);
-        }
     }
+    
+    printf("*** Hra zacina ***\n");
+    do {
+        zahrajZapas(&hra, 0, klientSocket);
 
-    vypisBalik(&hra.zapas.balik);
+        inicializujZapas(&hra);
+        zamiesajBalik(&hra.zapas.balik);
+        for (int i = 0; i < pocetHracov - 1; i++) {
+            posliBalik(klientSocket[i], &hra.zapas.balik);
+            if (!overSpravu(klientSocket[i], SPRAVA_OK))
+                exit(EXIT_FAILURE);
+        }
+    } while(1);
 
     for (int i = 0; i < pocetHracov - 1; i++)
         close(klientSocket[i]);
@@ -578,10 +623,15 @@ void spustiKlient() {
     inicializujZapas(&hra);
     nacitajBalik(klientSocket, &hra.zapas.balik);
     posliSpravu(klientSocket, SPRAVA_OK);
-
+    
     printf("*** Hra zacina ***\n");
+    do {
+        zahrajZapas(&hra, ja, &klientSocket);
 
-    vypisBalik(&hra.zapas.balik);
+        inicializujZapas(&hra);
+        nacitajBalik(klientSocket, &hra.zapas.balik);
+        posliSpravu(klientSocket, SPRAVA_OK);
+    } while (1);
 
     close(klientSocket);
 }
